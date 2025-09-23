@@ -12,9 +12,12 @@ pipeline {
         stage('Test') {
             steps {
                 echo '✅ Running unit tests...'
-                sh 'pip install -r requirements.txt && pytest -v'
+                sh '''
+                    docker run --rm melbourne-app pytest
+                '''
             }
         }
+
 
         stage('Lint') {
             steps {
@@ -31,3 +34,4 @@ pipeline {
         }
     }
 }
+
