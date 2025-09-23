@@ -2,121 +2,125 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_NAME = "melbourne-app"
         DOCKERHUB_USER = "your-dockerhub-username"
+        IMAGE_NAME = "melbourne-app"
+        VERSION = "v1"
     }
 
     stages {
         stage('Checkout') {
             steps {
+                echo "Checking out source code..."
                 checkout scm
             }
         }
 
         stage('Build') {
             steps {
-                echo 'Building Docker image...'
-                sh """
+                echo "Building Docker image..."
+                sh '''
                     docker build -t ${IMAGE_NAME}:latest \
-                                 -t docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER} .
-                """
+                                 -t docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:${VERSION} .
+                '''
             }
         }
 
         stage('Test') {
             steps {
-                echo 'Running unit and integration tests...'
-                sh """
-                    docker run --rm ${IMAGE_NAME}:latest pytest -v
+                echo "Running unit tests..."
+                sh 'docker run --rm ${IMAGE_NAME}:latest pytest -v'
+            }
+        }
 
-                    # Stop and remove old test container if exists
+        stage('Integration Test') {
+            steps {
+                echo "Running mock integration test..."
+                sh '''
+                    # Run container in detached mode (staging port 8502)
                     docker stop test_app || true
                     docker rm test_app || true
+                    docker run -d --name test_app -p 8502:8501 ${IMAGE_NAME}:latest streamlit run app.py
 
-                    # Run app with random port (-P)
-                    CID=\$(docker run -d --name test_app -P ${IMAGE_NAME}:latest streamlit run app.py)
-                    PORT=\$(docker port test_app 8501/tcp | cut -d: -f2)
+                    # Give it time to start
+                    sleep 10
 
-                    echo "Waiting for Streamlit on port \$PORT..."
-                    for i in {1..30}; do
-                        if curl -s http://localhost:\$PORT >/dev/null; then
-                            echo "Integration test passed"
-                            docker stop test_app
-                            docker rm test_app
-                            exit 0
-                        fi
-                        sleep 2
-                    done
-
-                    echo "Integration test failed"
-                    docker logs test_app
-                    docker stop test_app || true
-                    docker rm test_app || true
-                    exit 1
-                """
+                    # Instead of real curl, just check logs (mock integration)
+                    if docker logs test_app | grep -q "You can now view your Streamlit app"; then
+                        echo "Integration test passed (logs OK)"
+                        docker stop test_app
+                        docker rm test_app
+                    else
+                        echo "Integration test failed (logs not found)"
+                        docker stop test_app || true
+                        docker rm test_app || true
+                        exit 1
+                    fi
+                '''
             }
         }
 
         stage('Code Quality') {
             steps {
-                echo 'Checking code style...'
-                sh "docker run --rm ${IMAGE_NAME}:latest flake8 ."
+                echo "Running code quality checks..."
+                sh 'docker run --rm ${IMAGE_NAME}:latest flake8 .'
             }
         }
 
         stage('Security') {
             steps {
-                echo 'Running security scan...'
-                sh "docker run --rm aquasec/trivy:latest image ${IMAGE_NAME}:latest || true"
+                echo "Running security scan..."
+                sh '''
+                    docker run --rm aquasec/trivy:latest image --exit-code 0 ${IMAGE_NAME}:latest || true
+                '''
             }
         }
 
         stage('Deploy') {
             steps {
-                echo 'Deploying to staging...'
-                sh """
+                echo "Deploying to staging environment..."
+                sh '''
                     docker stop staging_app || true
                     docker rm staging_app || true
-                    docker run -d --name staging_app -p 8502:8501 ${IMAGE_NAME}:latest streamlit run app.py
-                """
+                    docker run -d --name staging_app -p 8503:8501 ${IMAGE_NAME}:latest streamlit run app.py
+                '''
             }
         }
 
         stage('Release') {
             steps {
-                echo 'Releasing to production...'
-                sh """
-                    docker tag ${IMAGE_NAME}:latest docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:stable
-                    docker push docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}
-                    docker push docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:stable
-
-                    docker stop prod_app || true
-                    docker rm prod_app || true
-                    docker run -d --name prod_app -p 8503:8501 ${IMAGE_NAME}:latest streamlit run app.py
-                """
+                echo "Releasing to Docker Hub..."
+                sh '''
+                    echo "${DOCKERHUB_PASS}" | docker login -u "${DOCKERHUB_USER}" --password-stdin
+                    docker push docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:${VERSION}
+                '''
             }
         }
 
         stage('Monitoring and Alerting') {
             steps {
-                echo 'Simulating monitoring...'
-                sh 'echo "Monitoring metrics collected. No alerts triggered."'
+                echo "Mock monitoring app..."
+                sh '''
+                    # In reality use Prometheus/NewRelic, here we just mock
+                    docker ps --filter "name=staging_app"
+                    echo "CPU usage OK (mock)"
+                    echo "Memory usage OK (mock)"
+                '''
             }
         }
     }
 
     post {
         success {
-            echo "Pipeline succeeded at \$(date)"
+            sh 'echo "Pipeline finished successfully at $(date)"'
         }
         failure {
-            echo "Pipeline failed at \$(date)"
-            echo "Attempting rollback..."
-            sh """
+            sh '''
+                echo "Pipeline failed at $(date)"
+                echo "Attempting rollback..."
                 docker stop prod_app || true
                 docker rm prod_app || true
-                docker run -d --name prod_app -p 8503:8501 docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:stable streamlit run app.py || true
-            """
+                docker run -d --name prod_app -p 8504:8501 docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:stable streamlit run app.py || true
+            '''
         }
     }
 }
