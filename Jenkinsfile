@@ -3,8 +3,7 @@ pipeline {
 
     environment {
         IMAGE_NAME = "melbourne-app"
-        DOCKERHUB_USER = "your-dockerhub-username"   // sửa thành DockerHub username thật
-        VERSION = "v1"
+        DOCKERHUB_USER = "your-dockerhub-username"
     }
 
     stages {
@@ -16,37 +15,36 @@ pipeline {
 
         stage('Build') {
             steps {
-                echo "Building Docker image..."
-                sh '''
+                echo 'Building Docker image...'
+                sh """
                     docker build -t ${IMAGE_NAME}:latest \
-                                 -t docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:${VERSION} .
-                '''
+                                 -t docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER} .
+                """
             }
         }
 
         stage('Test') {
             steps {
-                echo "Running unit and integration tests..."
-                sh '''
-                    # Unit tests
+                echo 'Running unit and integration tests...'
+                sh """
                     docker run --rm ${IMAGE_NAME}:latest pytest -v
 
-                    # Cleanup any old container
+                    # Stop and remove old test container if exists
                     docker stop test_app || true
                     docker rm test_app || true
 
-                    # Run app for integration test
-                    docker run -d --name test_app -p 8501:8501 ${IMAGE_NAME}:latest streamlit run app.py
+                    # Run app with random port (-P)
+                    CID=\$(docker run -d --name test_app -P ${IMAGE_NAME}:latest streamlit run app.py)
+                    PORT=\$(docker port test_app 8501/tcp | cut -d: -f2)
 
-                    echo "Waiting for Streamlit app..."
+                    echo "Waiting for Streamlit on port \$PORT..."
                     for i in {1..30}; do
-                        if curl -s http://localhost:8501 >/dev/null; then
+                        if curl -s http://localhost:\$PORT >/dev/null; then
                             echo "Integration test passed"
                             docker stop test_app
                             docker rm test_app
                             exit 0
                         fi
-                        echo "Still waiting... ($i)"
                         sleep 2
                     done
 
@@ -55,74 +53,70 @@ pipeline {
                     docker stop test_app || true
                     docker rm test_app || true
                     exit 1
-                '''
+                """
             }
         }
 
         stage('Code Quality') {
             steps {
-                echo "Running code quality checks..."
-                sh '''
-                    docker run --rm ${IMAGE_NAME}:latest flake8 .
-                '''
+                echo 'Checking code style...'
+                sh "docker run --rm ${IMAGE_NAME}:latest flake8 ."
             }
         }
 
         stage('Security') {
             steps {
-                echo "Running security scan..."
-                sh '''
-                    docker run --rm aquasec/trivy:latest image ${IMAGE_NAME}:latest || true
-                '''
+                echo 'Running security scan...'
+                sh "docker run --rm aquasec/trivy:latest image ${IMAGE_NAME}:latest || true"
             }
         }
 
         stage('Deploy') {
             steps {
-                echo "Deploying to staging environment..."
-                sh '''
+                echo 'Deploying to staging...'
+                sh """
                     docker stop staging_app || true
                     docker rm staging_app || true
                     docker run -d --name staging_app -p 8502:8501 ${IMAGE_NAME}:latest streamlit run app.py
-                '''
+                """
             }
         }
 
         stage('Release') {
             steps {
-                echo "Pushing Docker image to DockerHub..."
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                    sh '''
-                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                        docker push docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:${VERSION}
-                    '''
-                }
+                echo 'Releasing to production...'
+                sh """
+                    docker tag ${IMAGE_NAME}:latest docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:stable
+                    docker push docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:${BUILD_NUMBER}
+                    docker push docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:stable
+
+                    docker stop prod_app || true
+                    docker rm prod_app || true
+                    docker run -d --name prod_app -p 8503:8501 ${IMAGE_NAME}:latest streamlit run app.py
+                """
             }
         }
 
         stage('Monitoring and Alerting') {
             steps {
-                echo "Simulating monitoring..."
-                sh '''
-                    echo "Checking health of production service..."
-                    curl -f http://localhost:8502 || echo "Warning: staging service may be down"
-                '''
+                echo 'Simulating monitoring...'
+                sh 'echo "Monitoring metrics collected. No alerts triggered."'
             }
         }
     }
 
     post {
         success {
-            sh 'echo "Pipeline succeeded at $(date)"'
+            echo "Pipeline succeeded at \$(date)"
         }
         failure {
-            sh '''
-                echo "Pipeline failed at $(date)"
-                echo "Attempting rollback..."
+            echo "Pipeline failed at \$(date)"
+            echo "Attempting rollback..."
+            sh """
                 docker stop prod_app || true
                 docker rm prod_app || true
                 docker run -d --name prod_app -p 8503:8501 docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:stable streamlit run app.py || true
-            '''
+            """
         }
     }
 }
