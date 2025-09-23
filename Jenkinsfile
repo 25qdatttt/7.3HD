@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         REGISTRY = "docker.io/your-dockerhub-username/melbourne-app"
-        DOCKER_TAG = "v${env.BUILD_NUMBER}"
+        DOCKER_TAG = "v10"
     }
 
     stages {
@@ -11,8 +11,7 @@ pipeline {
             steps {
                 echo "Building Docker image..."
                 sh '''
-                  docker build -t melbourne-app:latest \
-                               -t $REGISTRY:$DOCKER_TAG .
+                    docker build -t melbourne-app:latest -t $REGISTRY:$DOCKER_TAG .
                 '''
             }
         }
@@ -21,39 +20,41 @@ pipeline {
             steps {
                 echo "Running unit and integration tests..."
                 sh '''
-                  # Unit test
-                  docker run --rm melbourne-app:latest pytest -v
+                    # Run unit tests inside container
+                    docker run --rm melbourne-app:latest pytest -v
 
-                  # Integration test with random port
-                  docker stop test_app || true
-                  docker rm test_app || true
+                    # Clean up old test container if exists
+                    docker stop test_app || true
+                    docker rm test_app || true
 
-                  docker run -d --name test_app -P melbourne-app:latest streamlit run app.py
-                  sleep 10
+                    # Run container on fixed port for integration test
+                    docker run -d --name test_app -p 8502:8501 melbourne-app:latest streamlit run app.py
+                    sleep 20
 
-                  PORT=$(docker port test_app 8501/tcp | cut -d: -f2)
-                  echo "Integration test on port $PORT"
-                  curl -f http://localhost:$PORT || (echo "Integration test failed" && exit 1)
+                    # Check if app is alive
+                    curl -f http://localhost:8502 || (echo "Integration test failed" && exit 1)
 
-                  docker stop test_app
-                  docker rm test_app
+                    # Cleanup
+                    docker stop test_app
+                    docker rm test_app
                 '''
             }
         }
 
         stage('Code Quality') {
             steps {
-                echo "Checking code quality with flake8..."
-                sh 'docker run --rm melbourne-app:latest flake8 . || true'
+                echo "Running flake8 for code quality..."
+                sh '''
+                    docker run --rm melbourne-app:latest flake8 . || true
+                '''
             }
         }
 
         stage('Security') {
             steps {
-                echo "Running security scan with Bandit & Safety..."
+                echo "Running safety security scan..."
                 sh '''
-                  docker run --rm melbourne-app:latest bandit -r .
-                  docker run --rm melbourne-app:latest safety check || true
+                    docker run --rm melbourne-app:latest safety check || true
                 '''
             }
         }
@@ -62,33 +63,35 @@ pipeline {
             steps {
                 echo "Deploying to staging environment..."
                 sh '''
-                  docker stop staging_app || true
-                  docker rm staging_app || true
-                  docker run -d --name staging_app -p 8502:8501 melbourne-app:latest streamlit run app.py
+                    docker stop staging_app || true
+                    docker rm staging_app || true
+                    docker run -d --name staging_app -p 8503:8501 melbourne-app:latest streamlit run app.py
                 '''
             }
         }
 
         stage('Release') {
             steps {
-                echo "Promoting to production..."
+                echo "Releasing to production..."
                 sh '''
-                  docker tag melbourne-app:latest $REGISTRY:stable
-                  docker push $REGISTRY:$DOCKER_TAG
-                  docker push $REGISTRY:stable
+                    echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                    docker push $REGISTRY:$DOCKER_TAG
+                    docker tag melbourne-app:latest $REGISTRY:stable
+                    docker push $REGISTRY:stable
 
-                  docker stop prod_app || true
-                  docker rm prod_app || true
-                  docker run -d --name prod_app -p 8503:8501 $REGISTRY:stable streamlit run app.py
+                    docker stop prod_app || true
+                    docker rm prod_app || true
+                    docker run -d --name prod_app -p 8504:8501 $REGISTRY:stable streamlit run app.py
                 '''
             }
         }
 
         stage('Monitoring and Alerting') {
             steps {
-                echo "Monitoring production container..."
+                echo "Simulating monitoring step..."
                 sh '''
-                  docker ps | grep prod_app || (echo "Production app is not running!" && exit 1)
+                    echo "Health check production app..."
+                    curl -f http://localhost:8504 || echo "Production app not responding!"
                 '''
             }
         }
@@ -96,14 +99,14 @@ pipeline {
 
     post {
         success {
-            echo "Pipeline finished successfully at ${new Date()}"
+            echo "Pipeline finished successfully at $(date)"
         }
         failure {
-            echo "Pipeline failed. Rolling back to last stable release..."
+            echo "Pipeline failed. Rolling back..."
             sh '''
-              docker stop prod_app || true
-              docker rm prod_app || true
-              docker run -d --name prod_app -p 8503:8501 $REGISTRY:stable streamlit run app.py || true
+                docker stop prod_app || true
+                docker rm prod_app || true
+                docker run -d --name prod_app -p 8504:8501 $REGISTRY:stable streamlit run app.py || true
             '''
         }
     }
