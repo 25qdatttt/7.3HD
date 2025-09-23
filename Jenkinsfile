@@ -17,10 +17,14 @@ pipeline {
         stage('Build') {
             steps {
                 echo "Building Docker image..."
-                sh '''
-                    docker build -t ${IMAGE_NAME}:latest \
-                                 -t docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:${VERSION} .
-                '''
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-pass',
+                                                 usernameVariable: 'DOCKERHUB_USER',
+                                                 passwordVariable: 'DOCKERHUB_PASS')]) {
+                    sh '''
+                        docker build -t ${IMAGE_NAME}:latest \
+                                     -t docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:${VERSION} .
+                    '''
+                }
             }
         }
 
@@ -61,7 +65,6 @@ pipeline {
         stage('Security') {
             steps {
                 echo "Running security scan..."
-                // scan filesystem instead of image to avoid docker.sock issue
                 sh 'docker run --rm -v $(pwd):/project aquasec/trivy:latest fs /project || true'
             }
         }
