@@ -22,16 +22,23 @@ pipeline {
         stage('Lint') {
             steps {
                 echo '🧹 Checking code style...'
-                sh 'pip install flake8 && flake8 app.py'
+                sh '''
+                    docker run --rm melbourne-app flake8 .
+                '''
             }
         }
 
+
         stage('Deploy') {
             steps {
-                echo '🚀 Deploying container...'
-                sh 'docker run -d -p 8501:8501 --name melbourne-app melbourne-app || true'
+                echo '🚀 Deploying application...'
+                sh '''
+                    docker run -d -p 8501:8501 --name melbourne-app melbourne-app
+                '''
             }
         }
+
     }
 }
+
 
