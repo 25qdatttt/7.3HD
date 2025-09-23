@@ -2,7 +2,6 @@ pipeline {
     agent any
 
     environment {
-        DOCKERHUB_USER = "your-dockerhub-username"
         IMAGE_NAME = "melbourne-app"
         VERSION = "v1"
     }
@@ -81,12 +80,14 @@ pipeline {
         stage('Release') {
             steps {
                 echo "Pushing to DockerHub..."
-                withCredentials([string(credentialsId: 'dockerhub-pass', variable: 'DOCKERHUB_PASS')]) {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-pass',
+                                                 usernameVariable: 'DOCKERHUB_USER',
+                                                 passwordVariable: 'DOCKERHUB_PASS')]) {
                     sh '''
-                        echo $DOCKERHUB_PASS | docker login -u $DOCKERHUB_USER --password-stdin
-                        docker push docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:${VERSION}
-                        docker tag ${IMAGE_NAME}:latest docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:stable
-                        docker push docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:stable
+                        echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
+                        docker push docker.io/$DOCKERHUB_USER/${IMAGE_NAME}:${VERSION}
+                        docker tag ${IMAGE_NAME}:latest docker.io/$DOCKERHUB_USER/${IMAGE_NAME}:stable
+                        docker push docker.io/$DOCKERHUB_USER/${IMAGE_NAME}:stable
                     '''
                 }
             }
@@ -109,13 +110,17 @@ pipeline {
             sh 'echo "Pipeline finished successfully at $(date)"'
         }
         failure {
-            sh '''
-                echo "Pipeline failed at $(date)"
-                echo "Rollback: starting stable image..."
-                docker stop prod_app || true
-                docker rm prod_app || true
-                docker run -d --name prod_app -p 8504:8501 docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:stable streamlit run app.py || true
-            '''
+            withCredentials([usernamePassword(credentialsId: 'dockerhub-pass',
+                                             usernameVariable: 'DOCKERHUB_USER',
+                                             passwordVariable: 'DOCKERHUB_PASS')]) {
+                sh '''
+                    echo "Pipeline failed at $(date)"
+                    echo "Rollback: starting stable image..."
+                    docker stop prod_app || true
+                    docker rm prod_app || true
+                    docker run -d --name prod_app -p 8504:8501 docker.io/$DOCKERHUB_USER/${IMAGE_NAME}:stable streamlit run app.py || true
+                '''
+            }
         }
     }
 }
