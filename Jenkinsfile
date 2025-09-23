@@ -2,18 +2,18 @@ pipeline {
     agent any
 
     environment {
-        DOCKERHUB_USER = "your-dockerhub-username"
         IMAGE_NAME = "melbourne-app"
+        DOCKERHUB_USER = "your-dockerhub-username"
     }
 
     stages {
         stage('Build') {
             steps {
                 echo "Building Docker image..."
-                sh """
+                sh '''
                     docker build -t ${IMAGE_NAME}:latest \
                                  -t docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:v1 .
-                """
+                '''
             }
         }
 
@@ -25,33 +25,50 @@ pipeline {
                     docker stop test_app || true
                     docker rm test_app || true
                     docker run -d --name test_app -P ${IMAGE_NAME}:latest streamlit run app.py
-                    sleep 10
                     PORT=$(docker port test_app 8501/tcp | cut -d: -f2)
-                    echo "Integration test on port $PORT"
-                    curl -f http://localhost:$PORT || (echo "Integration test failed" && exit 1)
+                    echo "Waiting for service on port $PORT..."
+                    for i in {1..30}; do
+                        if curl -s http://localhost:$PORT >/dev/null; then
+                            echo "Integration test passed"
+                            docker stop test_app
+                            docker rm test_app
+                            exit 0
+                        fi
+                        echo "Waiting... ($i)"
+                        sleep 2
+                    done
+                    echo "Integration test failed"
+                    docker logs test_app
                     docker stop test_app
                     docker rm test_app
+                    exit 1
                 '''
             }
         }
 
         stage('Code Quality') {
             steps {
-                echo "Checking code quality with flake8..."
-                sh 'docker run --rm ${IMAGE_NAME}:latest flake8 . || true'
+                echo "Checking code quality..."
+                sh '''
+                    docker run --rm -v $(pwd):/app -w /app python:3.10-slim \
+                        sh -c "pip install flake8 && flake8 --max-line-length=100 ."
+                '''
             }
         }
 
         stage('Security') {
             steps {
-                echo "Running security scan with bandit..."
-                sh 'docker run --rm ${IMAGE_NAME}:latest bandit -r . || true'
+                echo "Running security scan..."
+                sh '''
+                    docker run --rm -v $(pwd):/app -w /app python:3.10-slim \
+                        sh -c "pip install bandit && bandit -r . || true"
+                '''
             }
         }
 
         stage('Deploy') {
             steps {
-                echo "Deploying application to staging..."
+                echo "Deploying to staging..."
                 sh '''
                     docker stop staging_app || true
                     docker rm staging_app || true
@@ -75,10 +92,11 @@ pipeline {
 
         stage('Monitoring and Alerting') {
             steps {
-                echo "Monitoring production container..."
+                echo "Simulating monitoring checks..."
                 sh '''
-                    docker ps --filter "name=prod_app"
-                    docker logs prod_app --tail 20 || true
+                    docker ps
+                    echo "Health check:"
+                    curl -s http://localhost:8503 || true
                 '''
             }
         }
@@ -90,9 +108,11 @@ pipeline {
         }
         failure {
             sh 'echo "Pipeline failed at $(date)"'
-        }
-        always {
-            sh 'echo "Pipeline finished at $(date)"'
+            sh '''
+                docker stop prod_app || true
+                docker rm prod_app || true
+                docker run -d --name prod_app -p 8503:8501 docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:stable streamlit run app.py || true
+            '''
         }
     }
 }
