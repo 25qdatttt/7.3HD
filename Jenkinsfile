@@ -2,6 +2,7 @@ pipeline {
     agent any
 
     environment {
+        DOCKERHUB_USER = "your-dockerhub-username"
         IMAGE_NAME = "melbourne-app"
         VERSION = "v1"
     }
@@ -61,7 +62,7 @@ pipeline {
         stage('Security') {
             steps {
                 echo "Running security scan..."
-                // scan filesystem thay vì docker.sock để tránh lỗi
+                // scan filesystem instead of image to avoid docker.sock issue
                 sh 'docker run --rm -v $(pwd):/project aquasec/trivy:latest fs /project || true'
             }
         }
@@ -80,14 +81,12 @@ pipeline {
         stage('Release') {
             steps {
                 echo "Pushing to DockerHub..."
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-pass',
-                                                 usernameVariable: 'DOCKERHUB_USER',
-                                                 passwordVariable: 'DOCKERHUB_PASS')]) {
+                withCredentials([string(credentialsId: 'dockerhub-pass', variable: 'DOCKERHUB_PASS')]) {
                     sh '''
-                        echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
-                        docker push docker.io/$DOCKERHUB_USER/${IMAGE_NAME}:${VERSION}
-                        docker tag ${IMAGE_NAME}:latest docker.io/$DOCKERHUB_USER/${IMAGE_NAME}:stable
-                        docker push docker.io/$DOCKERHUB_USER/${IMAGE_NAME}:stable
+                        echo $DOCKERHUB_PASS | docker login -u $DOCKERHUB_USER --password-stdin
+                        docker push docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:${VERSION}
+                        docker tag ${IMAGE_NAME}:latest docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:stable
+                        docker push docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:stable
                     '''
                 }
             }
@@ -110,17 +109,13 @@ pipeline {
             sh 'echo "Pipeline finished successfully at $(date)"'
         }
         failure {
-            withCredentials([usernamePassword(credentialsId: 'dockerhub-pass',
-                                             usernameVariable: 'DOCKERHUB_USER',
-                                             passwordVariable: 'DOCKERHUB_PASS')]) {
-                sh '''
-                    echo "Pipeline failed at $(date)"
-                    echo "Rollback: starting stable image..."
-                    docker stop prod_app || true
-                    docker rm prod_app || true
-                    docker run -d --name prod_app -p 8504:8501 docker.io/$DOCKERHUB_USER/${IMAGE_NAME}:stable streamlit run app.py || true
-                '''
-            }
+            sh '''
+                echo "Pipeline failed at $(date)"
+                echo "Rollback: starting stable image..."
+                docker stop prod_app || true
+                docker rm prod_app || true
+                docker run -d --name prod_app -p 8504:8501 docker.io/${DOCKERHUB_USER}/${IMAGE_NAME}:stable streamlit run app.py || true
+            '''
         }
     }
 }
