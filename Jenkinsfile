@@ -82,19 +82,20 @@ pipeline {
 
         stage('Release') {
             steps {
-                echo "Pushing to DockerHub..."
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-pass',
-                                                 usernameVariable: 'DOCKERHUB_USER',
-                                                 passwordVariable: 'DOCKERHUB_PASS')]) {
+                echo "Creating release in Octopus..."
+                withCredentials([string(credentialsId: 'octopus-api-key', variable: 'OCTO_API_KEY')]) {
                     sh '''
-                        echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
-                        docker push docker.io/$DOCKERHUB_USER/${IMAGE_NAME}:${VERSION}
-                        docker tag ${IMAGE_NAME}:latest docker.io/$DOCKERHUB_USER/${IMAGE_NAME}:stable
-                        docker push docker.io/$DOCKERHUB_USER/${IMAGE_NAME}:stable
+                        octo create-release \
+                          --project "Melbourne Housing Predictor" \
+                          --version ${VERSION} \
+                          --deployTo Development \
+                          --server http://your-octopus-server:8080 \
+                          --apiKey $OCTO_API_KEY
                     '''
                 }
             }
         }
+
 
         stage('Monitoring and Alerting') {
             steps {
@@ -127,3 +128,4 @@ pipeline {
         }
     }
 }
+
