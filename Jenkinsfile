@@ -30,15 +30,12 @@ pipeline {
 
         stage('Test') {
             steps {
-                echo "Running unit tests..."
-                sh 'docker run --rm ${IMAGE_NAME}:latest pytest -v'
-            }
-        }
-
-        stage('Integration Test') {
-            steps {
-                echo "Running mock integration test..."
+                echo "Running unit and integration tests..."
                 sh '''
+                    # Unit tests
+                    docker run --rm ${IMAGE_NAME}:latest pytest -v
+
+                    # Integration test
                     docker stop test_app || true
                     docker rm test_app || true
                     docker run -d --name test_app -p 8502:8501 ${IMAGE_NAME}:latest streamlit run app.py
@@ -127,4 +124,3 @@ pipeline {
         }
     }
 }
-
