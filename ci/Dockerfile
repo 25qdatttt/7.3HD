@@ -8,4 +8,3 @@ RUN apt-get update && \
 
 RUN groupadd -f docker && usermod -aG docker jenkins
 USER jenkins
-
