@@ -6,6 +6,6 @@ RUN apt-get update && \
     apt-get install -y docker.io docker-compose && \
     rm -rf /var/lib/apt/lists/*
 
-RUN groupadd -for docker && usermod -aG docker jenkins
-
+RUN groupadd -f docker && usermod -aG docker jenkins
 USER jenkins
+
